@@ -21,6 +21,8 @@ async function solve(res, url, sitekey) {
     return res.status(400).json({ error: "Missing url or sitekey" });
   }
 
+  console.log("[solve] Starting solve for", { url, sitekey });
+
   let browser = null;
   try {
     browser = await chromium.launch({ headless: true });
@@ -38,15 +40,25 @@ async function solve(res, url, sitekey) {
       route.fulfill({ status: 200, contentType: "text/html", body: html })
     );
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    console.log("[solve] Page loaded");
 
     let token = null;
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 45; i++) {
       token = await page.evaluate(() => {
         const el = document.querySelector('[name="cf-turnstile-response"]');
         if (el && el.value && el.value.length > 10) return el.value;
+        const all = document.querySelectorAll("input");
+        for (const inp of all) {
+          if (inp.name && inp.name.includes("turnstile") && inp.value && inp.value.length > 20) return inp.value;
+        }
         return null;
       });
-      if (token && token.length > 20) break;
+
+      if (token && token.length > 20) {
+        console.log("[solve] Token found at iteration", i);
+        break;
+      }
+
       if (i === 5) {
         await page.evaluate(() => {
           const w = document.querySelector(".cf-turnstile");
@@ -54,12 +66,23 @@ async function solve(res, url, sitekey) {
         });
         await page.click(".cf-turnstile").catch(() => {});
       }
+
+      if (i % 10 === 0 && i > 0) {
+        console.log("[solve] Still waiting, iteration", i);
+      }
+
       await new Promise((r) => setTimeout(r, 1000));
     }
 
-    if (!token) return res.status(500).json({ error: "Failed to solve Turnstile" });
+    if (!token) {
+      console.log("[solve] No token found after 45s");
+      return res.status(500).json({ error: "Failed to solve Turnstile" });
+    }
+
+    console.log("[solve] Success, token length:", token.length);
     return res.status(200).json({ token });
   } catch (err) {
+    console.error("[solve] Error:", err.message);
     return res.status(500).json({ error: err.message });
   } finally {
     if (browser) await browser.close();
