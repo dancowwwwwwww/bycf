@@ -1,0 +1,14 @@
+{
+  "name": "bycf",
+  "version": "1.0.0",
+  "description": "Cloudflare Turnstile Solver API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "patchright": "^1.52.0",
+    "patchright-core": "^1.52.0"
+  }
+}
