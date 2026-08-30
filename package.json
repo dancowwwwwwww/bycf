@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "express": "^4.21.0",
-    "patchright": "^1.52.0",
-    "patchright-core": "^1.52.0"
+    "patchright": "1.52.0",
+    "patchright-core": "1.52.0"
   }
 }
