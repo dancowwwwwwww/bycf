@@ -21,87 +21,88 @@ async function solve(res, url, sitekey) {
     return res.status(400).json({ error: "Missing url or sitekey" });
   }
 
-  console.log("[solve] Starting solve for", { url, sitekey });
-
+  console.log("[solve] Starting", { url, sitekey });
   let browser = null;
+
   try {
-    browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext({ viewport: null });
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--enable-unsafe-swiftshader",
+        "--window-size=1920,1080",
+      ],
+    });
+
+    const context = await browser.newContext({
+      viewport: { width: 1920, height: 1080 },
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      locale: "en-US",
+      timezoneId: "America/New_York",
+    });
     const page = await context.newPage();
-
-    page.on("console", (msg) => {
-      console.log("[page]", msg.type(), msg.text());
-    });
-
-    page.on("pageerror", (err) => {
-      console.log("[page-error]", err.message);
-    });
 
     const html = `<!DOCTYPE html>
 <html><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-</head><body>
-<h1>Turnstile Test</h1>
-<div class="cf-turnstile" data-sitekey="${sitekey}" data-theme="light"></div>
-<div id="debug">No token yet</div>
+</head><body style="margin:0;padding:0">
+<div class="cf-turnstile" data-sitekey="${sitekey}" data-theme="light" style="width:300px;margin:50px auto"></div>
 </body></html>`;
 
     await page.route(url + "*", (route) =>
       route.fulfill({ status: 200, contentType: "text/html", body: html })
     );
-    
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    console.log("[solve] Page loaded");
 
-    await page.waitForTimeout(5000);
-
-    const pageContent = await page.content();
-    console.log("[solve] Page has cf-turnstile:", pageContent.includes("cf-turnstile"));
-    console.log("[solve] Page has turnstile script:", pageContent.includes("turnstile/v0/api.js"));
+    await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+    console.log("[solve] Page loaded, waiting for Turnstile...");
 
     let token = null;
-    for (let i = 0; i < 45; i++) {
-      const debugInfo = await page.evaluate(() => {
+    for (let i = 0; i < 60; i++) {
+      token = await page.evaluate(() => {
         const el = document.querySelector('[name="cf-turnstile-response"]');
-        const widget = document.querySelector('.cf-turnstile');
-        const iframes = document.querySelectorAll('iframe');
-        const scripts = document.querySelectorAll('script[src*="turnstile"]');
-        return {
-          hasTokenInput: !!el,
-          tokenValue: el ? el.value.substring(0, 50) : null,
-          hasWidget: !!widget,
-          widgetHTML: widget ? widget.innerHTML.substring(0, 200) : null,
-          iframeCount: iframes.length,
-          scriptCount: scripts.length,
-        };
+        if (el && el.value && el.value.length > 10) return el.value;
+        return null;
       });
 
-      if (debugInfo.hasTokenInput && debugInfo.tokenValue && debugInfo.tokenValue.length > 20) {
-        token = debugInfo.tokenValue;
-        console.log("[solve] Token found!", { length: token.length });
+      if (token && token.length > 20) {
+        console.log("[solve] Token found at", i, "len:", token.length);
         break;
       }
 
-      if (i === 5) {
-        await page.evaluate(() => {
-          const w = document.querySelector(".cf-turnstile");
-          if (w) w.style.width = "70px";
-        });
-        await page.click(".cf-turnstile").catch(() => {});
+      if (i === 3) {
+        try {
+          const frame = page.frames().find(f => f.url().includes("challenges.cloudflare.com"));
+          if (frame) {
+            console.log("[solve] Found Turnstile iframe");
+            await frame.click("body").catch(() => {});
+          }
+        } catch (e) {}
       }
 
-      if (i % 10 === 0) {
-        console.log("[solve] Iteration", i, JSON.stringify(debugInfo));
+      if (i % 15 === 0 && i > 0) {
+        const info = await page.evaluate(() => {
+          return {
+            iframes: document.querySelectorAll("iframe").length,
+            inputs: document.querySelectorAll('input[name="cf-turnstile-response"]').length,
+            widgetDiv: !!document.querySelector(".cf-turnstile"),
+          };
+        });
+        console.log("[solve] Iteration", i, JSON.stringify(info));
       }
 
       await new Promise((r) => setTimeout(r, 1000));
     }
 
     if (!token) {
-      console.log("[solve] No token found after 45s");
+      console.log("[solve] Failed - no token");
       return res.status(500).json({ error: "Failed to solve Turnstile" });
     }
 
+    console.log("[solve] Success");
     return res.status(200).json({ token });
   } catch (err) {
     console.error("[solve] Error:", err.message);
