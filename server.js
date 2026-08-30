@@ -29,33 +29,56 @@ async function solve(res, url, sitekey) {
     const context = await browser.newContext({ viewport: null });
     const page = await context.newPage();
 
+    page.on("console", (msg) => {
+      console.log("[page]", msg.type(), msg.text());
+    });
+
+    page.on("pageerror", (err) => {
+      console.log("[page-error]", err.message);
+    });
+
     const html = `<!DOCTYPE html>
 <html><head>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head><body>
+<h1>Turnstile Test</h1>
 <div class="cf-turnstile" data-sitekey="${sitekey}" data-theme="light"></div>
+<div id="debug">No token yet</div>
 </body></html>`;
 
     await page.route(url + "*", (route) =>
       route.fulfill({ status: 200, contentType: "text/html", body: html })
     );
+    
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
     console.log("[solve] Page loaded");
 
+    await page.waitForTimeout(5000);
+
+    const pageContent = await page.content();
+    console.log("[solve] Page has cf-turnstile:", pageContent.includes("cf-turnstile"));
+    console.log("[solve] Page has turnstile script:", pageContent.includes("turnstile/v0/api.js"));
+
     let token = null;
     for (let i = 0; i < 45; i++) {
-      token = await page.evaluate(() => {
+      const debugInfo = await page.evaluate(() => {
         const el = document.querySelector('[name="cf-turnstile-response"]');
-        if (el && el.value && el.value.length > 10) return el.value;
-        const all = document.querySelectorAll("input");
-        for (const inp of all) {
-          if (inp.name && inp.name.includes("turnstile") && inp.value && inp.value.length > 20) return inp.value;
-        }
-        return null;
+        const widget = document.querySelector('.cf-turnstile');
+        const iframes = document.querySelectorAll('iframe');
+        const scripts = document.querySelectorAll('script[src*="turnstile"]');
+        return {
+          hasTokenInput: !!el,
+          tokenValue: el ? el.value.substring(0, 50) : null,
+          hasWidget: !!widget,
+          widgetHTML: widget ? widget.innerHTML.substring(0, 200) : null,
+          iframeCount: iframes.length,
+          scriptCount: scripts.length,
+        };
       });
 
-      if (token && token.length > 20) {
-        console.log("[solve] Token found at iteration", i);
+      if (debugInfo.hasTokenInput && debugInfo.tokenValue && debugInfo.tokenValue.length > 20) {
+        token = debugInfo.tokenValue;
+        console.log("[solve] Token found!", { length: token.length });
         break;
       }
 
@@ -67,8 +90,8 @@ async function solve(res, url, sitekey) {
         await page.click(".cf-turnstile").catch(() => {});
       }
 
-      if (i % 10 === 0 && i > 0) {
-        console.log("[solve] Still waiting, iteration", i);
+      if (i % 10 === 0) {
+        console.log("[solve] Iteration", i, JSON.stringify(debugInfo));
       }
 
       await new Promise((r) => setTimeout(r, 1000));
@@ -79,7 +102,6 @@ async function solve(res, url, sitekey) {
       return res.status(500).json({ error: "Failed to solve Turnstile" });
     }
 
-    console.log("[solve] Success, token length:", token.length);
     return res.status(200).json({ token });
   } catch (err) {
     console.error("[solve] Error:", err.message);
